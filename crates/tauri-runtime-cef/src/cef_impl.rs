@@ -4666,6 +4666,7 @@ pub(crate) fn create_webview<T: UserEvent>(
     let initialization_scripts = initialization_scripts.clone();
     let custom_protocol_scheme = custom_protocol_scheme.clone();
     let mut client = client;
+    let window_id = window_id;
     move |mut request_context| {
       apply_request_context_theme_scheme(request_context.as_ref(), window_theme);
 
@@ -4703,7 +4704,25 @@ pub(crate) fn create_webview<T: UserEvent>(
           }
         };
 
-        let mut window_info = cef::WindowInfo::default().set_as_child(window_handle, &child_bounds);
+        // On Windows, parent a window-child webview (e.g. the browser pane) to the
+        // main content webview's HWND instead of the top-level window, so it always
+        // renders ABOVE the main content and reliably receives mouse input. As a
+        // sibling of the main webview it loses the z-order battle (the main webview
+        // re-raises on interaction) and clicks pass through to the transparent main.
+        #[cfg(windows)]
+        let child_parent_handle = {
+          let windows = context.windows.borrow();
+          windows
+            .get(&window_id)
+            .and_then(|w| w.webviews.first())
+            .and_then(|wv| wv.inner.browser())
+            .and_then(|b| b.host())
+            .map(|host| host.window_handle())
+            .unwrap_or(window_handle)
+        };
+        #[cfg(not(windows))]
+        let child_parent_handle = window_handle;
+        let mut window_info = cef::WindowInfo::default().set_as_child(child_parent_handle, &child_bounds);
         window_info.runtime_style = cef_runtime_style;
 
         let Some(browser_host) = browser_host_create_browser_sync(
